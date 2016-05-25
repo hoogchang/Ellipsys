@@ -26,13 +26,17 @@ struct biquad {
 	double y1; double y2; };			// output
 
 #include "Controller.h"
+#include "Impulse.h"
 
 /* prototypes */
 void *Timer_Irq_Thread(void* resource);
 void *Table_Update_Thread(void* resource);
 double cascade(int ns, double xin, struct biquad *fa);
-double position(void);
+double position(MyRio_Encoder encC);
 double angle(void);
+double double_in(char *prompt);
+NiFpga_Status	EncoderC0_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
+NiFpga_Status	EncoderC1_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
 
 /* definitions */
 MyRio_Aio CI0;					// Input channel
@@ -49,6 +53,8 @@ static double bufferX[IMAX];	// torque buffer
 static double *bpX = bufferX;	// torque buffer pointer
 static double bufferT[IMAX];	// speed buffer
 static double *bpT = bufferT;	// speed buffer pointer
+static int mode, confirm = 0; // 0 = Regular, 1 = Impulse
+static double angularVelocity;
 
 // Thread Resource structure for Timer IRQ thread
 typedef struct {
@@ -77,7 +83,11 @@ int main(int argc, char **argv) {
     if (MyRio_IsNotSuccess(status)) return status;
 
     printf("Capstone Hello World!\n");			// Print to Console
-
+    while (confirm == 0) {
+        mode = double_in("\f0 - Regular\n1 - Impulse : \n");
+        confirm = double_in("\fare you sure? \nyes - 1, no - 0 : \n");
+    }
+//    mode = 1;
     MyRio_IrqTimer irqTimer0;
     ThreadResource irqThread0;
     pthread_t thread;
@@ -150,6 +160,7 @@ int main(int argc, char **argv) {
     status = Irq_UnregisterTimerIrq(
     		&irqTimer0,
     		irqThread0.timerContext);
+    printf("Angular Velocity: %d \n",angularVelocity);
 
 	status = MyRio_Close();	 /*Close the myRIO NiFpga Session. */
 	return status;
@@ -174,8 +185,12 @@ void *Timer_Irq_Thread(void* resource) {
 	double *Xcart = &((threadResource->a_table+2)->value);
 	double *Vcart  = &((threadResource->a_table+3)->value);
 	double *VDA   = &((threadResource->a_table+4)->value);
-
 	int 	Ns = 2;					// No. of sections
+	double targetD;
+	double t = 0, t_inc;
+	t_inc = (double) timeoutValue;
+	double currentP = 0;
+	static double angP1, angP2;
 
 	while(threadResource->TimerThreadRdy == NiFpga_True) {
 		uint32_t irqAssert = 0;
@@ -200,22 +215,47 @@ void *Timer_Irq_Thread(void* resource) {
 
 		if(irqAssert) {
 
-			*Xcart = position();
-			*Theta = 1*angle();
+			*Xcart = position(encC0) - currentP;
+			angP2 = *Theta;
+			*Theta = 1*angle(); //
+			angP1 = *Theta;
 			*Xball = *Xcart + L*sin(*Theta*3.1416/180);
 			*Vcart = (*Xcart - Xcartprev)/timeoutValue;
 //			Vball = (*Xball - Xballprev)/timeoutValue;
 			Xcartprev = *Xcart;
 
 
+			if (mode == 1) { //impulse
+				*VDA = -1.5;
+			} else if (mode == 2) { //wait until angle = 0
+//				*VDA = -cascade(1, 2*(targetD - *Xcart), ImpulseController);
+//				if (*VDA > 0) {
+//					*VDA = *VDA + 3;
+//				} else if (*VDA < 0){
+//					*VDA = *VDA - 3;
+//				}
+				*VDA = 0;
 
-			V1 = -cascade(Ns, *Xball, controller1);		// Implement control law
-			V2 = -cascade(Ns, *Theta*3.1416/180, controller2);
+				if (*Theta > 0) {
+					currentP = *Xcart;
+					mode = 0;
+					angularVelocity = M_PI*(angP1 - angP2)/(180.0*timeoutValue/1000000.0); //saves in r/s
+//					encC0.cnfg = ENCC_0CNFG;
+//				    encC0.stat = ENCC_0STAT;
+//				    encC0.cntr = 1;
+//				    encC0.cntr = ENCC_0CNTR;
+//					EncoderC0_initialize(myrio_session, &encC0);
+				}
+			} else {
+				V1 = -cascade(Ns, *Xball, controller1);		// Implement control law
+				V2 = -cascade(Ns, *Theta*3.1416/180, controller2);
+				*VDA = V1 + V2;
+//				*VDA = 0;
+			}
 //
 //			V1 = 0;
 //			V2 = 0;
 
-			*VDA = V1 + V2;
 
 //			if(*Theta < 1.5 && *Theta > -1.5 && *Xball > -0.015 && *Xball < 0.015) {
 //				*VDA = 0;
@@ -255,6 +295,12 @@ void *Timer_Irq_Thread(void* resource) {
 			Aio_Write(&CO0, *VDA);			// Write output voltage to motor
 			// Aio_Write(&CO0, -0.75);			// Write output voltage to motor
 
+			if (mode == 1 && t > 0.5) {
+				mode = 2;
+				targetD = *Xcart;
+			}
+			t = t + t_inc/1000000;
+
 			Irq_Acknowledge(irqAssert);		// Acknowledge interrupt
 		}
 	}
@@ -266,6 +312,8 @@ void *Timer_Irq_Thread(void* resource) {
     matfile_addmatrix(mf, "V", bufferV, IMAX, 1, 0);
     matfile_addmatrix(mf, "Xcart", bufferX, IMAX, 1, 0);
     matfile_addmatrix(mf, "Theta", bufferT, IMAX, 1, 0);
+	matfile_addmatrix(mf, "ThetaDot", &angularVelocity, 1, 1, 0); //r/s
+
     matfile_close(mf);
 
 	pthread_exit(NULL);
@@ -329,14 +377,14 @@ double cascade(int ns, double xin, struct biquad *fa) {
 // Used by *Timer_Irq_Thread
 // Inputs: None
 // Outputs: (double) cart position (m)
-double position(void) {
+double position(MyRio_Encoder encC) {
 	static int Cn;			// current count
 	static int Czero;		// count at zero position
 	double x;				// cart position (m)
 	double r = 0.022;		// pulley radius (m);
 	static int first = 1;
 
-	Cn = Encoder_Counter(&encC0);	// read current encoder count
+	Cn = Encoder_Counter(&encC);	// read current encoder count
 	if(first == 1) {				// set previous count to current count
 		Czero = Cn;					// only for first run of function
 		first = 0;
@@ -368,4 +416,25 @@ double angle(void) {
 	theta = -(Cn - Czero)*360.0/4096;
 
 	return theta;
+}
+
+double double_in(char *prompt) {
+	int err;
+	char String[40]; //not sure why 40
+	err = 1; //used as a check to determine if program returns an error
+	double val;
+	printf_lcd("\f");
+	while (err == 1) {
+		printf_lcd("\v%s\n", prompt);
+		if (fgets_keypad(String, 40) == NULL) {
+			printf_lcd("\f\n\nShort. Try Again.");
+		} else if ((strpbrk(String, "[]") != NULL) ||
+				(strpbrk(String+1, "-") != NULL) ||
+				(strstr(String, "..") != NULL)) {
+			printf_lcd("\f\n\nBad Key. Try Again.");
+		} else {
+			err = 0; sscanf(String, "%lf", &val);
+		}
+	}
+	return val;
 }
