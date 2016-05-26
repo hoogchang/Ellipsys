@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     pthread_t thread2;
 
     // 1. Initialize table editor variables
-    char *Table_Title = "Motor Control Table";
+    char *Table_Title = "Payload Stabilizer";
     static struct table motor_table[] = {
     		{"Theta:",  0, 0},
     		{"X_ball:", 0, 0},
@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
     status = Irq_UnregisterTimerIrq(
     		&irqTimer0,
     		irqThread0.timerContext);
-    printf("Angular Velocity: %d \n",angularVelocity);
+    printf("Angular Velocity: %g \n",angularVelocity);
 
 	status = MyRio_Close();	 /*Close the myRIO NiFpga Session. */
 	return status;
@@ -192,13 +192,16 @@ void *Timer_Irq_Thread(void* resource) {
 	double currentP = 0;
 	static double angP1, angP2;
 
+	// For system identification
+	int timer = 0;
+
 	while(threadResource->TimerThreadRdy == NiFpga_True) {
 		uint32_t irqAssert = 0;
 		double V1, V2;
 		double Xcartprev = 0;
 //		double Xballprev = 0;
 //		double Vball = 0;
-		double VDAprev;
+//		double VDAprev;
 		int Vmax;
 		Irq_Wait( threadResource->timerContext,	// Wait for next interrupt
 				  TIMERIRQNO,
@@ -274,7 +277,7 @@ void *Timer_Irq_Thread(void* resource) {
 			if (bpV < bufferV + IMAX) *bpV++ = *VDA;	// Store speed data in array
 
 
-			Vmax = 3;
+			Vmax = 3.5;
 			if (*VDA > Vmax) {						// Set saturation voltages (+10 and -10)
 				*VDA = Vmax;
 			} else if (*VDA < -Vmax) {
@@ -292,8 +295,18 @@ void *Timer_Irq_Thread(void* resource) {
 //				*VDA = 0;
 //			}
 
+
+			// Setting constant voltage for system identification
+			static double Vconst = -2.5;
+			if(timer < 750) {
+				*VDA = Vconst;
+			} else {
+				*VDA = 0;
+			}
+			timer++;
+
 			Aio_Write(&CO0, *VDA);			// Write output voltage to motor
-			// Aio_Write(&CO0, -0.75);			// Write output voltage to motor
+//		Aio_Write(&CO0, Vconst);			// Write output voltage to motor
 
 			if (mode == 1 && t > 0.5) {
 				mode = 2;
@@ -307,7 +320,7 @@ void *Timer_Irq_Thread(void* resource) {
 
 	// Store variable values and Vact/Torque responses from last velocity change
 	mf = openmatfile("Lab.mat", &err);
-	matfile_addstring(mf, "myName", "Michael Gilroy");
+	matfile_addstring(mf, "myName", "ellipsys");
 	if (!mf) printf("Can't open mat file %d\n", err);
     matfile_addmatrix(mf, "V", bufferV, IMAX, 1, 0);
     matfile_addmatrix(mf, "Xcart", bufferX, IMAX, 1, 0);
