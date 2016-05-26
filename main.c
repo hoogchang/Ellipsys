@@ -1,4 +1,3 @@
-// Michael
 /* Capstone - Team Ellypsis */
 /* University of Washington, Mechanical Engineering */
 /* Winter-Spring 2015-16 */
@@ -179,6 +178,12 @@ void *Timer_Irq_Thread(void* resource) {
 	ThreadResource* threadResource = (ThreadResource*) resource;
 	MATFILE *mf;
 	int err;
+	double Xc;
+	double Xb;
+	double Vc;
+	double Th;
+	double Vout;
+	double Xcartprev = 0;
 	#define L	0.7		// string length (m)
 
 	double *Theta   = &((threadResource->a_table+0)->value);
@@ -194,12 +199,12 @@ void *Timer_Irq_Thread(void* resource) {
 	static double angP1, angP2;
 
 	// For system identification
-	int timer = 0;
+//	int timer = 0;
+//	double Vconst = -1;
 
 	while(threadResource->TimerThreadRdy == NiFpga_True) {
 		uint32_t irqAssert = 0;
 		double V1, V2;
-		double Xcartprev = 0;
 //		double Xballprev = 0;
 //		double Vball = 0;
 //		double VDAprev;
@@ -219,29 +224,43 @@ void *Timer_Irq_Thread(void* resource) {
 
 		if(irqAssert) {
 
-			*Xcart = position(encC0) - currentP;
-			angP2 = *Theta;
-			*Theta = 1*angle(); //
-			angP1 = *Theta;
-			*Xball = *Xcart + L*sin(*Theta*3.1416/180);
-			*Vcart = (*Xcart - Xcartprev)/timeoutValue;
-//			Vball = (*Xball - Xballprev)/timeoutValue;
-			Xcartprev = *Xcart;
+
+//			*Xcart = position(encC0) - currentP;
+//			angP2 = *Theta;
+//			*Theta = 1*angle(); //
+//			angP1 = *Theta;
+//			*Xball = *Xcart + L*sin(*Theta*3.1416/180);
+//			*Vcart = (*Xcart - Xcartprev)/timeoutValue;
+////			Vball = (*Xball - Xballprev)/timeoutValue;
+//			Xcartprev = *Xcart;
+
+			Xc = position(encC0) - currentP;
+			*Xcart = round(100000*Xc)/1000.0;
+			angP2 = Th;
+			Th = 1*angle();
+			*Theta = round(1000*Th)/1000.0;
+			angP1 = Th;
+			Xb = Xc + L*sin(Th*3.1416/180);
+			*Xball = round(100000*Xb)/1000.0;
+			Vc = (Xc - Xcartprev)/(timeoutValue / 1000000.0);
+			*Vcart = round(1000*Vc)/1000.0;
+//			Vb = (Xb - Xballprev)/timeoutValue;
+			Xcartprev = Xc;
 
 
 			if (mode == 1) { //impulse
-				*VDA = -1.5;
+				Vout = -1.5;
 			} else if (mode == 2) { //wait until angle = 0
-//				*VDA = -cascade(1, 2*(targetD - *Xcart), ImpulseController);
-//				if (*VDA > 0) {
-//					*VDA = *VDA + 3;
-//				} else if (*VDA < 0){
-//					*VDA = *VDA - 3;
+//				Vout = -cascade(1, 2*(targetD - Xc), ImpulseController);
+//				if (Vout > 0) {
+//					Vout = Vout + 3;
+//				} else if (Vout < 0){
+//					Vout = Vout - 3;
 //				}
-				*VDA = 0;
+				Vout = 0;
 
-				if (*Theta > 0) {
-					currentP = *Xcart;
+				if (Th > 0) {
+					currentP = Xc;
 					mode = 0;
 					angularVelocity = M_PI*(angP1 - angP2)/(180.0*timeoutValue/1000000.0); //saves in r/s
 //					encC0.cnfg = ENCC_0CNFG;
@@ -251,67 +270,77 @@ void *Timer_Irq_Thread(void* resource) {
 //					EncoderC0_initialize(myrio_session, &encC0);
 				}
 			} else {
-				V1 = -cascade(Ns, *Xball, controller1);		// Implement control law
-				V2 = -cascade(Ns, *Theta*3.1416/180, controller2);
-				*VDA = V1 + V2;
-//				*VDA = 0;
+				V1 = -cascade(Ns, Xb, controller1);		// Implement control law
+				V2 = -cascade(Ns, Th*3.1416/180, controller2);
+				Vout = V1 + V2;
+//				Vout = 0;
 			}
+			*VDA = round(1000*Vout)/1000.0;
 //
 //			V1 = 0;
 //			V2 = 0;
 
 
-//			if(*Theta < 1.5 && *Theta > -1.5 && *Xball > -0.015 && *Xball < 0.015) {
-//				*VDA = 0;
+//			if(Th < 1.5 && Th > -1.5 && Xb > -0.015 && Xb < 0.015) {
+//				Vout = 0;
 //			}
 
-//			if (*Theta < 1 && *Theta > -1 && *Xball > -0.01 && *Xball < 0.01 && *VDA*VDAprev <= 0) {
-//				*VDA = 0;
+//			if (Th < 1 && Th > -1 && Xb > -0.01 && Xb < 0.01 && *Vout * VDAprev <= 0) {
+//				Vout = 0;
 //			}
-//			VDAprev = *VDA;
-			if (*VDA > 0) {
-				*VDA = *VDA + 0.78;
-			} else if (*VDA < 0){
-				*VDA = *VDA - 0.78;
+//			VDAprev = Vout;
+			if (Vout > 0) {
+				Vout = Vout + 0.78;
+			} else if (Vout < 0){
+				Vout = Vout - 0.78;
 			}
 
-			if (bpV < bufferV + IMAX) *bpV++ = *VDA;	// Store speed data in array
+			if (bpV < bufferV + IMAX) *bpV++ = Vout;	// Store voltage data in array
 
 
 			Vmax = 3.5;
-			if (*VDA > Vmax) {						// Set saturation voltages (+10 and -10)
-				*VDA = Vmax;
-			} else if (*VDA < -Vmax) {
-				*VDA = -Vmax;
+			if (Vout > Vmax) {						// Set saturation voltages (+10 and -10)
+				Vout = Vmax;
+			} else if (Vout < -Vmax) {
+				Vout = -Vmax;
 			}
 
-			// if (bpV < bufferV + IMAX) *bpV++ = *VDA;	// Store speed data in array
-			if (bpX < bufferX + IMAX) *bpX++ = *Xcart;	// Store torque data in array
-			if (bpT < bufferT + IMAX) *bpT++ = *Theta;	// Store torque data in array
+			// if (bpV < bufferV + IMAX) *bpV++ = Vc;	// Store speed data in array
+			if (bpX < bufferX + IMAX) *bpX++ = Xc;	// Store position data in array
+			if (bpT < bufferT + IMAX) *bpT++ = Th;	// Store angle data in array
 
 
 
 
-//			if(*Xball > -0.015 && *Xball < 0.015) {
-//				*VDA = 0;
+//			if(Xb > -0.015 && Xb < 0.015) {
+//				Vout = 0;
 //			}
 
 
 			// Setting constant voltage for system identification
-			static double Vconst = -2.5;
-			if(timer < 750) {
-				*VDA = Vconst;
-			} else {
-				*VDA = 0;
-			}
-			timer++;
+//			static double Vconst = -2.5;
+//			if(timer < 750) {
+//				Vout = Vconst;
+//			} else {
+//				Vout= 0;
+//			}
+//			timer++;
 
-			Aio_Write(&CO0, *VDA);			// Write output voltage to motor
+//			static double Vconst = -1;
+//
+//			timer++;
+//			if(timer > 1000) {
+//				Vconst = 0;
+//			}
+
+
+			Aio_Write(&CO0, Vout);			// Write output voltage to motor
 //		Aio_Write(&CO0, Vconst);			// Write output voltage to motor
 
 			if (mode == 1 && t > 0.5) {
 				mode = 2;
-				targetD = *Xcart;
+				targetD = Xc;
+				printf("/f%f", targetD);
 			}
 			t = t + t_inc/1000000;
 
