@@ -36,8 +36,8 @@ double cascade(int ns, double xin, struct biquad *fa);
 double position(MyRio_Encoder encC);
 double angle(void);
 double double_in(char *prompt);
-double max(double array[]);
-double min(double array[]);
+double max(double array[], int n);
+double min(double array[], int n);
 NiFpga_Status	EncoderC0_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
 NiFpga_Status	EncoderC1_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
 
@@ -50,7 +50,8 @@ MyRio_Encoder encC1;			// encoder
 // uint32_t timeoutValue = 1000;	// T - us
 
 #define IMAX	5000				// max points
-#define JMAX	500
+#define JMAX	100000
+#define KMAX	100
 static double bufferV[IMAX];	// speed buffer
 static double *bpV = bufferV;	// speed buffer pointer
 static double bufferX[IMAX];	// torque buffer
@@ -59,7 +60,7 @@ static double bufferT[IMAX];	// speed buffer
 static double *bpT = bufferT;	// speed buffer pointer
 static double bufferXc[JMAX];	// speed buffer
 static double *bpXc = bufferXc;	// speed buffer pointer
-static double bufferVDA[JMAX];	// speed buffer
+static double bufferVDA[KMAX];	// speed buffer
 static double *bpVDA = bufferVDA;	// speed buffer pointer
 static int mode, confirm = 0; // 0 = Regular, 1 = Impulse
 static double angularVelocity;
@@ -209,7 +210,6 @@ void *Timer_Irq_Thread(void* resource) {
 	double *VDA   = &((threadResource->a_table+4)->value);
 	double *Mode  = &((threadResource->a_table+5)->value);
 	double *Dstrb = &((threadResource->a_table+6)->value);
-	double strb = 0;
 
 	int 	Ns = 2;					// No. of sections
 	double targetD;
@@ -218,7 +218,7 @@ void *Timer_Irq_Thread(void* resource) {
 	double currentP = 0;
 	static double angP1, angP2;
 
-	// For system identification
+//  For system identification
 //	int timer = 0;
 //	double Vconst = -1;
 
@@ -285,7 +285,7 @@ void *Timer_Irq_Thread(void* resource) {
 			} else {
 				if(Xb > 0.2 || Xb < -0.2) {
 					mode = 0;
-					strb = 1;
+					*Dstrb = 1;
 				}
 				V1 = -cascade(Ns, Xb, controller1);		// Implement control law
 				V2 = -cascade(Ns, Th*3.1416/180, controller2);
@@ -297,20 +297,21 @@ void *Timer_Irq_Thread(void* resource) {
 //				Vout = 0;
 			}
 			*VDA = round(1000*Vout)/1000.0;
-			*Dstrb = strb;
-//
+
 //			V1 = 0;
 //			V2 = 0;
 
-
+//			// Turn off voltage based on position and angle
 //			if(Th < 1.5 && Th > -1.5 && Xb > -0.015 && Xb < 0.015) {
 //				Vout = 0;
 //			}
 
+//			// Turn off voltage based on position, angle, VDAprev
 //			if (Th < 1 && Th > -1 && Xb > -0.01 && Xb < 0.01 && *Vout * VDAprev <= 0) {
 //				Vout = 0;
 //			}
 //			VDAprev = Vout;
+
 			if (Vcart > 0) {
 				Vout = Vout + 0.78;
 			} else if (Vcart < 0){
@@ -341,7 +342,7 @@ void *Timer_Irq_Thread(void* resource) {
 				// bpVDA = bufferVDA;
 			}
 
-
+//			// Averages
 //			Xavg = 0;
 //			Vavg = 0;
 //			int i;
@@ -349,25 +350,26 @@ void *Timer_Irq_Thread(void* resource) {
 //				Xavg = Xavg + bufferXc[i];
 //				Vavg = Vavg + bufferVDA[i];
 //			}
-
 //			Xavg = Xavg/JMAX;
 //			Vavg = Vavg/JMAX;
 
 			Xavg = (Xavg*JMAX - Xdrop + Xc)/JMAX;
-			Vavg = (Vavg*JMAX - Vdrop + Vreq)/JMAX;
+			Vavg = (Vavg*KMAX - Vdrop + Vreq)/KMAX;
 
-			if(max(bufferXc) - Xavg < 0.05 && Xavg - min(bufferXc) < 0.05 && Xb < 0.03 && Xb > -0.03 && strb == 1) {
+			if(Vc < 0.2 && Vc > -0.2 && max(bufferXc, JMAX) - Xavg < 0.01 && Xavg - min(bufferXc, JMAX) < 0.01 && Xb < 0.03 && Xb > -0.03 && *Dstrb == 1) {
 				mode = 3;
 			}
+//			if(Vc < 0.2 && Vc > -0.2 && Xb < 0.02 && Xb > -0.02 && *Dstrb == 1) {
+//				mode = 3;
+//			}
 
 
-
+//			// Turn off voltage based on position
 //			if(Xb > -0.015 && Xb < 0.015) {
 //				Vout = 0;
 //			}
 
-
-			// Setting constant voltage for system identification
+//			// Setting constant voltage for system identification
 //			static double Vconst = -2.5;
 //			if(timer < 750) {
 //				Vout = Vconst;
@@ -375,7 +377,7 @@ void *Timer_Irq_Thread(void* resource) {
 //				Vout= 0;
 //			}
 //			timer++;
-
+//
 //			static double Vconst = -1;
 //
 //			timer++;
@@ -412,6 +414,8 @@ void *Timer_Irq_Thread(void* resource) {
 	pthread_exit(NULL);
 	return NULL;
 }
+
+
 
 // ***********************************************************************************************
 // Table_Update_Thread
@@ -464,6 +468,8 @@ double cascade(int ns, double xin, struct biquad *fa) {
 	return y0;
 }
 
+
+
 // ***********************************************************************************************
 // position subprogram
 // Purpose: Return cart position in meters by reading encoder counter
@@ -488,6 +494,8 @@ double position(MyRio_Encoder encC) {
 	return x;
 }
 
+
+
 // ***********************************************************************************************
 // angle subprogram
 // Purpose: Return pendulum angle in degrees by reading encoder counter
@@ -511,6 +519,8 @@ double angle(void) {
 	return theta;
 }
 
+
+
 double double_in(char *prompt) {
 	int err;
 	char String[40]; //not sure why 40
@@ -532,10 +542,12 @@ double double_in(char *prompt) {
 	return val;
 }
 
-double max(double array[]) {
+
+
+double max(double array[], int n) {
 	int j;
 	int m = array[0];
-	for(j = 1; j < sizeof(array); j++) {
+	for(j = 1; j < n; j++) {
 		if(array[j] > m) {
 			m = array[j];
 		}
@@ -543,10 +555,12 @@ double max(double array[]) {
 	return m;
 }
 
-double min(double array[]) {
+
+
+double min(double array[], int n) {
 	int j;
 	int m = array[0];
-	for(j = 1; j < sizeof(array); j++) {
+	for(j = 1; j < n; j++) {
 		if(array[j] < m) {
 			m = array[j];
 		}
