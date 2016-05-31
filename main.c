@@ -18,7 +18,6 @@
 #include "AIO.h"
 #include "matlabfiles.h"
 #include <math.h>
-#include <stdlib.h>
 
 struct biquad {
 	double b0; double b1; double b2; 	// numerator
@@ -36,8 +35,6 @@ double cascade(int ns, double xin, struct biquad *fa);
 double position(MyRio_Encoder encC);
 double angle(void);
 double double_in(char *prompt);
-double max(double array[], int n);
-double min(double array[], int n);
 NiFpga_Status	EncoderC0_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
 NiFpga_Status	EncoderC1_initialize(NiFpga_Session myrio_session, MyRio_Encoder *encC0p);
 
@@ -49,17 +46,16 @@ MyRio_Encoder encC0;			// encoder
 MyRio_Encoder encC1;			// encoder
 // uint32_t timeoutValue = 1000;	// T - us
 
-#define IMAX	5000				// max points
-#define JMAX	100000
-#define KMAX	100
+#define IMAX	20000				// max points
+#define KMAX	125
 static double bufferV[IMAX];	// speed buffer
 static double *bpV = bufferV;	// speed buffer pointer
+static double bufferV1[IMAX];	// speed buffer
+static double *bpV1 = bufferV1;	// speed buffer pointer
 static double bufferX[IMAX];	// torque buffer
 static double *bpX = bufferX;	// torque buffer pointer
 static double bufferT[IMAX];	// speed buffer
 static double *bpT = bufferT;	// speed buffer pointer
-static double bufferXc[JMAX];	// speed buffer
-static double *bpXc = bufferXc;	// speed buffer pointer
 static double bufferVDA[KMAX];	// speed buffer
 static double *bpVDA = bufferVDA;	// speed buffer pointer
 static int mode, confirm = 0; // 0 = Regular, 1 = Impulse
@@ -107,13 +103,11 @@ int main(int argc, char **argv) {
     // 1. Initialize table editor variables
     char *Table_Title = "Payload Stabilizer";
     static struct table motor_table[] = {
-    		{"Theta:  ", 0, 0},
-    		{"X_ball: ", 0, 0},
-    		{"X_cart: ", 0, 0},
-    		{"V_cart: ", 0, 0},
-    		{"VDAout: ", 0, 0},
-    		{"Mode:   ", 0, 0},
-    		{"Disturb:", 0, 0},
+    		{"Theta:",  0, 0},
+    		{"X_ball:", 0, 0},
+    		{"X_cart:", 0, 0},
+    		{"V_cart:", 0, 0},
+    		{"VDAout:", 0, 0},
     };
 
     irqThread0.a_table = motor_table;
@@ -158,7 +152,7 @@ int main(int argc, char **argv) {
     		&updateThread);
 
     // 7. Call table editor
-    ctable(Table_Title, motor_table, 7);
+    ctable(Table_Title, motor_table, 5);
     Aio_Write(&CO0, 0);
 
     // 8. Signal interrupt thread to stop
@@ -194,23 +188,17 @@ void *Timer_Irq_Thread(void* resource) {
 	double Vc;
 	double Th;
 	double Vout;
-	double Vreq;
 	double Xcartprev = 0;
-	double Xavg;			// Average position
-	double Vavg;			// Average voltage
-	double Xdrop;			// Oldest value of position array, being replaced
-	double Vdrop;			// Oldest value of voltage array, being replaced
-	// int settled = 1;
-	#define L	0.7			// string length (m)
+	// double Vreq = 0;
+	double Vavg = 0;	// Average voltage
+	double Vdrop = 0;	// Oldest value of voltage array, being replaced
+	#define L	0.7		// string length (m)
 
-	double *Theta = &((threadResource->a_table+0)->value);
+	double *Theta   = &((threadResource->a_table+0)->value);
 	double *Xball = &((threadResource->a_table+1)->value);
 	double *Xcart = &((threadResource->a_table+2)->value);
-	double *Vcart = &((threadResource->a_table+3)->value);
+	double *Vcart  = &((threadResource->a_table+3)->value);
 	double *VDA   = &((threadResource->a_table+4)->value);
-	double *Mode  = &((threadResource->a_table+5)->value);
-	double *Dstrb = &((threadResource->a_table+6)->value);
-
 	int 	Ns = 2;					// No. of sections
 	double targetD;
 	double t = 0, t_inc;
@@ -218,7 +206,7 @@ void *Timer_Irq_Thread(void* resource) {
 	double currentP = 0;
 	static double angP1, angP2;
 
-//  For system identification
+	// For system identification
 //	int timer = 0;
 //	double Vconst = -1;
 
@@ -244,6 +232,16 @@ void *Timer_Irq_Thread(void* resource) {
 
 		if(irqAssert) {
 
+
+//			*Xcart = position(encC0) - currentP;
+//			angP2 = *Theta;
+//			*Theta = 1*angle(); //
+//			angP1 = *Theta;
+//			*Xball = *Xcart + L*sin(*Theta*3.1416/180);
+//			*Vcart = (*Xcart - Xcartprev)/timeoutValue;
+////			Vball = (*Xball - Xballprev)/timeoutValue;
+//			Xcartprev = *Xcart;
+
 			Xc = position(encC0) - currentP;
 			*Xcart = round(100000*Xc)/1000.0;
 			angP2 = Th;
@@ -257,7 +255,7 @@ void *Timer_Irq_Thread(void* resource) {
 //			Vb = (Xb - Xballprev)/timeoutValue;
 			Xcartprev = Xc;
 
-			*Mode = mode;
+
 			if (mode == 1) { //impulse
 				Vout = -1.5;
 			} else if (mode == 2) { //wait until angle = 0
@@ -279,49 +277,36 @@ void *Timer_Irq_Thread(void* resource) {
 //				    encC0.cntr = ENCC_0CNTR;
 //					EncoderC0_initialize(myrio_session, &encC0);
 				}
-//			} else if(mode == 3) {
-//				Vout = Vavg;
-//				if(Xb > 0.3 || Xb < -0.3) mode = 0;
 			} else {
-				if(Xb > 0.2 || Xb < -0.2) {
-					mode = 0;
-					*Dstrb = 1;
-				}
 				V1 = -cascade(Ns, Xb, controller1);		// Implement control law
 				V2 = -cascade(Ns, Th*3.1416/180, controller2);
 				Vout = V1 + V2;
-				if(mode == 3) {
-					Vreq = Vout;
-					Vout = Vavg;
-				}
 //				Vout = 0;
 			}
 			*VDA = round(1000*Vout)/1000.0;
-
+//
 //			V1 = 0;
 //			V2 = 0;
 
-//			// Turn off voltage based on position and angle
+
 //			if(Th < 1.5 && Th > -1.5 && Xb > -0.015 && Xb < 0.015) {
 //				Vout = 0;
 //			}
 
-//			// Turn off voltage based on position, angle, VDAprev
 //			if (Th < 1 && Th > -1 && Xb > -0.01 && Xb < 0.01 && *Vout * VDAprev <= 0) {
 //				Vout = 0;
 //			}
 //			VDAprev = Vout;
-
-			if (Vcart > 0) {
+			if (Vout > 0) {
 				Vout = Vout + 0.78;
-			} else if (Vcart < 0){
+			} else if (Vout < 0){
 				Vout = Vout - 0.78;
 			}
 
 			if (bpV < bufferV + IMAX) *bpV++ = Vout;	// Store voltage data in array
 
 
-			Vmax = 3.5;
+			Vmax = 4;
 			if (Vout > Vmax) {						// Set saturation voltages (+10 and -10)
 				Vout = Vmax;
 			} else if (Vout < -Vmax) {
@@ -332,44 +317,25 @@ void *Timer_Irq_Thread(void* resource) {
 			if (bpX < bufferX + IMAX) *bpX++ = Xc;	// Store position data in array
 			if (bpT < bufferT + IMAX) *bpT++ = Th;	// Store angle data in array
 
-			Xdrop = *bpXc;
+
 			Vdrop = *bpVDA;
-			if (bpXc < bufferXc + 50) {
-				*bpXc++ = Xc;
-				// *bpVDA++ = Vout;
+			*bpVDA = Vout;
+			if (bpVDA < bufferVDA + KMAX - 1) {
+				bpVDA++;
 			} else {
-				bpXc = bufferXc;
-				// bpVDA = bufferVDA;
+				bpVDA = bufferVDA;
 			}
 
-//			// Averages
-//			Xavg = 0;
-//			Vavg = 0;
-//			int i;
-//			for(i = 0; i < JMAX; i++) {
-//				Xavg = Xavg + bufferXc[i];
-//				Vavg = Vavg + bufferVDA[i];
-//			}
-//			Xavg = Xavg/JMAX;
-//			Vavg = Vavg/JMAX;
-
-			Xavg = (Xavg*JMAX - Xdrop + Xc)/JMAX;
-			Vavg = (Vavg*KMAX - Vdrop + Vreq)/KMAX;
-
-			if(Vc < 0.2 && Vc > -0.2 && max(bufferXc, JMAX) - Xavg < 0.01 && Xavg - min(bufferXc, JMAX) < 0.01 && Xb < 0.03 && Xb > -0.03 && *Dstrb == 1) {
-				mode = 3;
-			}
-//			if(Vc < 0.2 && Vc > -0.2 && Xb < 0.02 && Xb > -0.02 && *Dstrb == 1) {
-//				mode = 3;
-//			}
+			Vavg = (Vavg*KMAX - Vdrop + Vout)/KMAX;		// Average of recently requested voltages
+			if (bpV1 < bufferV1 + IMAX) *bpV1++ = Vavg;	// Store voltage data in array
 
 
-//			// Turn off voltage based on position
 //			if(Xb > -0.015 && Xb < 0.015) {
 //				Vout = 0;
 //			}
 
-//			// Setting constant voltage for system identification
+
+			// Setting constant voltage for system identification
 //			static double Vconst = -2.5;
 //			if(timer < 750) {
 //				Vout = Vconst;
@@ -377,7 +343,7 @@ void *Timer_Irq_Thread(void* resource) {
 //				Vout= 0;
 //			}
 //			timer++;
-//
+
 //			static double Vconst = -1;
 //
 //			timer++;
@@ -386,7 +352,7 @@ void *Timer_Irq_Thread(void* resource) {
 //			}
 
 
-			Aio_Write(&CO0, Vout);			// Write output voltage to motor
+			Aio_Write(&CO0, Vavg);			// Write output voltage to motor
 //		Aio_Write(&CO0, Vconst);			// Write output voltage to motor
 
 			if (mode == 1 && t > 0.5) {
@@ -404,7 +370,8 @@ void *Timer_Irq_Thread(void* resource) {
 	mf = openmatfile("Lab.mat", &err);
 	matfile_addstring(mf, "myName", "ellipsys");
 	if (!mf) printf("Can't open mat file %d\n", err);
-    matfile_addmatrix(mf, "V", bufferV, IMAX, 1, 0);
+    matfile_addmatrix(mf, "Vreq", bufferV, IMAX, 1, 0);
+    matfile_addmatrix(mf, "Vact", bufferV1, IMAX, 1, 0);
     matfile_addmatrix(mf, "Xcart", bufferX, IMAX, 1, 0);
     matfile_addmatrix(mf, "Theta", bufferT, IMAX, 1, 0);
 	matfile_addmatrix(mf, "ThetaDot", &angularVelocity, 1, 1, 0); //r/s
@@ -414,8 +381,6 @@ void *Timer_Irq_Thread(void* resource) {
 	pthread_exit(NULL);
 	return NULL;
 }
-
-
 
 // ***********************************************************************************************
 // Table_Update_Thread
@@ -468,8 +433,6 @@ double cascade(int ns, double xin, struct biquad *fa) {
 	return y0;
 }
 
-
-
 // ***********************************************************************************************
 // position subprogram
 // Purpose: Return cart position in meters by reading encoder counter
@@ -494,8 +457,6 @@ double position(MyRio_Encoder encC) {
 	return x;
 }
 
-
-
 // ***********************************************************************************************
 // angle subprogram
 // Purpose: Return pendulum angle in degrees by reading encoder counter
@@ -519,8 +480,6 @@ double angle(void) {
 	return theta;
 }
 
-
-
 double double_in(char *prompt) {
 	int err;
 	char String[40]; //not sure why 40
@@ -540,30 +499,4 @@ double double_in(char *prompt) {
 		}
 	}
 	return val;
-}
-
-
-
-double max(double array[], int n) {
-	int j;
-	int m = array[0];
-	for(j = 1; j < n; j++) {
-		if(array[j] > m) {
-			m = array[j];
-		}
-	}
-	return m;
-}
-
-
-
-double min(double array[], int n) {
-	int j;
-	int m = array[0];
-	for(j = 1; j < n; j++) {
-		if(array[j] < m) {
-			m = array[j];
-		}
-	}
-	return m;
 }
