@@ -22,10 +22,6 @@ taum=Jt/B;
 Tm=Kda/(s*(taum*s+1)); %Plant Transfer Function [m/V]
 
 %% Controller
-Controller=pid(2.9,4);
-
-plot(step(feedback(Controller*Tm,1)));
-%% Controller
 %design goals:
 %under 10%OS, so zeta>.59, so PM>59deg
 Pm_desired=59;
@@ -51,22 +47,23 @@ p_c=1/(beta*T);
 Controller=k_c*(s+z_c)/(s+p_c);
 
 %% Test
-System=feedback(Controller*Tm,1);
-figure
-plot(step(System))
+% System=feedback(Controller*Tm,1);
+% figure
+% plot(step(System))
 
-%% C Biquad Header File
+%% C Biquad Header File & Butterworth Filter
 PrintToFile = 1; % Set to 0 to print header file in Command Window only
 
 HeaderFileName = ...
 '\Users\Mark Chang\Documents\Mechatronics\CAPSTONE\Impulse_d\Impulse.h';
-fs=2000;        %---Sampling frequency for discrete filter
+fs=4000;        %---Sampling frequency for discrete filter
 Sampling_Period=1/fs; 
 Controller_d=c2d(Controller,Sampling_Period,'tustin'); %Discretizing
 
 [b,a]=tfdata(Controller_d,'v');       %---get discrete system coefficients
 [sos,gain]=tf2sos(b,a);     %---convert to biquads
 [ns,n]=size(sos);
+
 for j=1:3                   %---Apply the gain to the final biquad
     sos(ns,j)=gain*sos(ns,j);
 end
@@ -77,15 +74,36 @@ else
     fid=1;   
 end
 
+% Butterworth Filter
+cutoff=30; %[Hz]
+cutoff=cutoff/(fs/2); %[pi*rad/sample]
+nthorder=2; %high order may eat up margin
+[b,a]=butter(nthorder, cutoff);
+[butter_sos,gain]=tf2sos(b,a);     %---convert to biquads
+[ns,n]=size(butter_sos);
+
+for j=1:3                   %---Apply the gain to the final biquad
+    butter_sos(ns,j)=gain*butter_sos(ns,j);
+end
+
+if PrintToFile
+    fid=fopen(HeaderFileName,'W');    
+else
+    fid=1;   
+end
+
+
+
+%%
 %---Structure for cascade
 comment='Impulse Disturbance Lead-Lag Compensator Biquad';
-PrintToBiquadFHeaderFile(fid, sos, 'ImpulseController', Sampling_Period, comment);
+PrintTo2BiquadFHeaderFile(fid, sos, 'ImpulseController', butter_sos, 'Butter', Sampling_Period, comment);
 
 if fid~=1
     fclose(fid);
 end 
 return
-
+1+1
 %% Trajectory Generation
 %NOTE: deltaT should change depending on the desired speed
 
@@ -100,8 +118,8 @@ a3=-2*(Desired_Position-Starting_Position)/(deltaT^3);
 
 t=linspace(0,2,100);
 Trajectory=a0+a1*t+a2*(t.^2)+a3*(t.^3);
-figure
-plot(t,Trajectory)
+% figure
+% plot(t,Trajectory)
 
 printf('done')
 
