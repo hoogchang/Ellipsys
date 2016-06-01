@@ -25,14 +25,8 @@ struct biquad {
 	double x0; double x1; double x2;	// input
 	double y1; double y2; };			// output
 
-#include "Controller.h"
+#include "Controller4000x.h"
 #include "Impulse.h"
-
-static struct biquad myFilter[] = {
-			{1.0000e+00, 9.9999e-01, 0.0000e+00, 1.0000e+00, -8.8177e-01, 0.0000e+00, 0, 0, 0, 0, 0},
-			{2.1878e-04, 4.3755e-04, 2.1878e-04, 1.0000e+00, -1.8674e+00, 8.8220e-01, 0, 0, 0, 0, 0}
-	};
-
 
 
 /* prototypes */
@@ -53,7 +47,7 @@ MyRio_Encoder encC0;			// encoder
 MyRio_Encoder encC1;			// encoder
 // uint32_t timeoutValue = 1000;	// T - us
 
-#define IMAX	20000				// max points
+#define IMAX	40000				// max points
 #define KMAX	125
 static double bufferV[IMAX];	// speed buffer
 static double *bpV = bufferV;	// speed buffer pointer
@@ -63,8 +57,8 @@ static double bufferX[IMAX];	// torque buffer
 static double *bpX = bufferX;	// torque buffer pointer
 static double bufferT[IMAX];	// speed buffer
 static double *bpT = bufferT;	// speed buffer pointer
-static double bufferVDA[KMAX];	// speed buffer
-static double *bpVDA = bufferVDA;	// speed buffer pointer
+//static double bufferVDA[KMAX];	// speed buffer
+//static double *bpVDA = bufferVDA;	// speed buffer pointer
 static int mode, confirm = 0; // 0 = Regular, 1 = Impulse
 static double angularVelocity;
 
@@ -82,8 +76,8 @@ typedef struct {
 } ThreadResource2;
 
 
-// ***********************************************************************************************
-// main subprogram
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  MAIN SUBPROGRAM  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
 // Purpose: Initialize table editor variables, analog I/O, and encoder counter.
 // Set up timer IRQ and create two threads, one to catch the timer interrupt and one to update the table.
 // Call the table editor, then signal both other threads to terminate once table editor exits and
@@ -178,8 +172,9 @@ int main(int argc, char **argv) {
 	return status;
 }
 
-// ***********************************************************************************************
-// Timer_Irq_Thread
+
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  TIMER IRQ THREAD  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 // Purpose: Define array of biquad structures corresponding to desired system
 // Wait for next interrupt to occur (every 0.5 millisecond), then schedule next interrupt
 // Service interrupt by reading analog input value, passing it through cascade function to
@@ -195,16 +190,18 @@ void *Timer_Irq_Thread(void* resource) {
 	double Vc;
 	double Th;
 	double Vout;
-	double Xcartprev = 0;
-	// double Vreq = 0;
-	double Vavg = 0;	// Average voltage
-	double Vdrop = 0;	// Oldest value of voltage array, being replaced
-	#define L	0.7		// string length (m)
 	double Vtemp;
-	double *Theta   = &((threadResource->a_table+0)->value);
+	double Xcomp = 0;
+	double Xcartprev = 0;
+//	double Vreq = 0;
+//	double Vavg = 0;	// Average voltage
+//	double Vdrop = 0;	// Oldest value of voltage array, being replaced
+	#define L	0.7		// string length (m)
+
+	double *Theta = &((threadResource->a_table+0)->value);
 	double *Xball = &((threadResource->a_table+1)->value);
 	double *Xcart = &((threadResource->a_table+2)->value);
-	double *Vcart  = &((threadResource->a_table+3)->value);
+	double *Vcart = &((threadResource->a_table+3)->value);
 	double *VDA   = &((threadResource->a_table+4)->value);
 	int 	Ns = 2;					// No. of sections
 	double targetD;
@@ -212,8 +209,9 @@ void *Timer_Irq_Thread(void* resource) {
 	t_inc = (double) timeoutValue;
 	double currentP = 0;
 	static double angP1, angP2;
-	static double filteredCartPosition, filteredAngle;
-	// For system identification
+//	static double filteredCartPosition, filteredAngle;
+
+// For system identification
 //	int timer = 0;
 //	double Vconst = -1;
 
@@ -239,16 +237,7 @@ void *Timer_Irq_Thread(void* resource) {
 
 		if(irqAssert) {
 
-
-//			*Xcart = position(encC0) - currentP;
-//			angP2 = *Theta;
-//			*Theta = 1*angle(); //
-//			angP1 = *Theta;
-//			*Xball = *Xcart + L*sin(*Theta*3.1416/180);
-//			*Vcart = (*Xcart - Xcartprev)/timeoutValue;
-////			Vball = (*Xball - Xballprev)/timeoutValue;
-//			Xcartprev = *Xcart;
-
+			// ********************** TABLE CALCULATIONS & ROUNDING ************************
 			Xc = position(encC0) - currentP;
 			*Xcart = round(100000*Xc)/1000.0;
 			angP2 = Th;
@@ -263,8 +252,9 @@ void *Timer_Irq_Thread(void* resource) {
 			Xcartprev = Xc;
 
 
+			// ************************ CHECK MODE, RUN CONTROLLER ************************
 			if (mode == 1) { //impulse
-				Vout = -1.5;
+				Vout = -2;
 			} else if (mode == 2) { //wait until angle = 0
 //				Vout = -cascade(1, 2*(targetD - Xc), ImpulseController);
 //				if (Vout > 0) {
@@ -287,39 +277,29 @@ void *Timer_Irq_Thread(void* resource) {
 			} else {
 //				filteredAngle = cascade(Butter_ns, Th, Butter);
 //				filteredCartPosition = cascade(Butter_ns, Xb, Butter);
-				filteredAngle = Th;
-				filteredCartPosition = Xb;
+//				filteredAngle = Th;
+//				filteredCartPosition = Xb;
 
-				V1 = -cascade(Ns, filteredCartPosition, controller1);		// Implement control law
-				V2 = -cascade(Ns, filteredAngle*3.1416/180, controller2);
-
-
+				Xcomp = cascade(1, Xb, controller3);
+				V1 = -cascade(Ns, Xb + Xcomp, controller1);		// Implement control law
+				V2 = -cascade(Ns, Th*3.1416/180, controller2);
+				// if (bpV < bufferV + IMAX) *bpV++ = V1;			// Store voltage data in array
+				// if (bpV1 < bufferV1 + IMAX) *bpV1++ = V2;		// Store voltage data in array
 
 				Vtemp = (V1 + V2)/2.5;
-//				Vout = 0;
+//				Vout = (V1 + V2)/2.5;
+				Vout = cascade(1, Vtemp, Butter);
 			}
+			*VDA = round(1000*Vout)/1000.0;
+
 			if (bpV1 < bufferV1 + IMAX) *bpV1++ = Vtemp;	// Store voltage data in array
 
-			Vmax = 9;
-			Vout = cascade(1, Vtemp, Butter);
 			if (bpV < bufferV + IMAX) *bpV++ = Vout;	// Store voltage data in array
 
-			*VDA = round(1000*Vout)/1000.0;
-//
-//			V1 = 0;
-//			V2 = 0;
 
-
-//			if(Th < 1.5 && Th > -1.5 && Xb > -0.015 && Xb < 0.015) {
-//				Vout = 0;
-//			}
-
-//			if (Th < 1 && Th > -1 && Xb > -0.01 && Xb < 0.01 && *Vout * VDAprev <= 0) {
-//				Vout = 0;
-//			}
 //			VDAprev = Vout;
 
-
+//			// ************************* FRICTION COMPENSATION ****************************
 //			if (Vout > 0) {
 //				Vout = Vout + 0.78;
 //			} else if (Vout < 0){
@@ -327,23 +307,23 @@ void *Timer_Irq_Thread(void* resource) {
 //			}
 
 
-			//butterworth
-			if (Vout > Vmax) {						// Set saturation voltages (+10 and -10)
+			// *************************** VOLTAGE LIMITING *******************************
+			Vmax = 7;
+			if (Vout > Vmax) {						// Set saturation voltages
 				Vout = Vmax;
 			} else if (Vout < -Vmax) {
 				Vout = -Vmax;
 			}
 
 
-
-
-
-
+			// ************************ UPDATE BUFFERS FOR MATLAB *************************
 			// if (bpV < bufferV + IMAX) *bpV++ = Vc;	// Store speed data in array
 			if (bpX < bufferX + IMAX) *bpX++ = Xc;	// Store position data in array
 			if (bpT < bufferT + IMAX) *bpT++ = Th;	// Store angle data in array
 
 
+
+//			// **************************** VOLTAGE AVERAGING *****************************
 //			Vdrop = *bpVDA;
 //			*bpVDA = Vout;
 //			if (bpVDA < bufferVDA + KMAX - 1) {
@@ -356,12 +336,13 @@ void *Timer_Irq_Thread(void* resource) {
 //			if (bpV1 < bufferV1 + IMAX) *bpV1++ = Vavg;	// Store voltage data in array
 
 
+//			// Set zero voltage if settled
 //			if(Xb > -0.015 && Xb < 0.015) {
 //				Vout = 0;
 //			}
 
 
-			// Setting constant voltage for system identification
+//			// ************************** SYSTEM IDENTIFICATION ***************************
 //			static double Vconst = -2.5;
 //			if(timer < 750) {
 //				Vout = Vconst;
@@ -369,7 +350,7 @@ void *Timer_Irq_Thread(void* resource) {
 //				Vout= 0;
 //			}
 //			timer++;
-
+//
 //			static double Vconst = -1;
 //
 //			timer++;
@@ -378,13 +359,14 @@ void *Timer_Irq_Thread(void* resource) {
 //			}
 
 
+
 			Aio_Write(&CO0, Vout);			// Write output voltage to motor
-//		Aio_Write(&CO0, Vconst);			// Write output voltage to motor
+//			Aio_Write(&CO0, Vconst);			// Write output voltage to motor
 
 			if (mode == 1 && t > 0.5) {
 				mode = 2;
 				targetD = Xc;
-				printf("/f%f", targetD);
+//				printf("/f%f", targetD);
 			}
 			t = t + t_inc/1000000;
 
@@ -392,7 +374,7 @@ void *Timer_Irq_Thread(void* resource) {
 		}
 	}
 
-	// Store variable values and Vact/Torque responses from last velocity change
+	// ***************************** SAVE DATA TO MATLAB FILE *****************************
 	mf = openmatfile("Lab.mat", &err);
 	matfile_addstring(mf, "myName", "ellipsys");
 	if (!mf) printf("Can't open mat file %d\n", err);
@@ -408,8 +390,9 @@ void *Timer_Irq_Thread(void* resource) {
 	return NULL;
 }
 
-// ***********************************************************************************************
-// Table_Update_Thread
+
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  TABLE UPDATE THREAD WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 // Purpose: Periodically update table of motor and controller values
 // Inputs: Generic 'resource' argument; cast to ThreadResource2 structure
 // Outputs: None
@@ -429,8 +412,8 @@ void *Table_Update_Thread(void* resource) {
 }
 
 
-// ***********************************************************************************************
-// cascade subprogram
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  CASCADE SUBPROGRAM  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 // Purpose: implement biquad cascade by sending input value through series of biquads
 // corresponding to desired transfer function
 // Used by *Timer_Irq_Thread to implement control law
@@ -459,8 +442,9 @@ double cascade(int ns, double xin, struct biquad *fa) {
 	return y0;
 }
 
-// ***********************************************************************************************
-// position subprogram
+
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  POSITION SUBPROGRAM  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW
 // Purpose: Return cart position in meters by reading encoder counter
 // Used by *Timer_Irq_Thread
 // Inputs: None
@@ -483,8 +467,9 @@ double position(MyRio_Encoder encC) {
 	return x;
 }
 
-// ***********************************************************************************************
-// angle subprogram
+
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  ANGLE SUBPROGRAM  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 // Purpose: Return pendulum angle in degrees by reading encoder counter
 // Used by *Timer_Irq_Thread
 // Inputs: None
@@ -506,6 +491,9 @@ double angle(void) {
 	return theta;
 }
 
+
+// ***************************************************************************************************
+// WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMW  DOUBLE_IN SUBPROGRAM  WMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWMWM
 double double_in(char *prompt) {
 	int err;
 	char String[40]; //not sure why 40
