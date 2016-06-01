@@ -28,6 +28,13 @@ struct biquad {
 #include "Controller.h"
 #include "Impulse.h"
 
+static struct biquad myFilter[] = {
+			{1.0000e+00, 9.9999e-01, 0.0000e+00, 1.0000e+00, -8.8177e-01, 0.0000e+00, 0, 0, 0, 0, 0},
+			{2.1878e-04, 4.3755e-04, 2.1878e-04, 1.0000e+00, -1.8674e+00, 8.8220e-01, 0, 0, 0, 0, 0}
+	};
+
+
+
 /* prototypes */
 void *Timer_Irq_Thread(void* resource);
 void *Table_Update_Thread(void* resource);
@@ -205,7 +212,7 @@ void *Timer_Irq_Thread(void* resource) {
 	t_inc = (double) timeoutValue;
 	double currentP = 0;
 	static double angP1, angP2;
-
+	static double filteredCartPosition, filteredAngle;
 	// For system identification
 //	int timer = 0;
 //	double Vconst = -1;
@@ -278,9 +285,19 @@ void *Timer_Irq_Thread(void* resource) {
 //					EncoderC0_initialize(myrio_session, &encC0);
 				}
 			} else {
-				V1 = -cascade(Ns, Xb, controller1);		// Implement control law
-				V2 = -cascade(Ns, Th*3.1416/180, controller2);
-				Vout = V1 + V2;
+//				filteredAngle = cascade(Butter_ns, Th, Butter);
+//				filteredCartPosition = cascade(Butter_ns, Xb, Butter);
+				filteredAngle = Th;
+				filteredCartPosition = Xb;
+
+				V1 = -cascade(Ns, filteredCartPosition, controller1);		// Implement control law
+				V2 = -cascade(Ns, filteredAngle*3.1416/180, controller2);
+				if (bpV < bufferV + IMAX) *bpV++ = V1;	// Store voltage data in array
+				if (bpV1 < bufferV1 + IMAX) *bpV1++ = V2;	// Store voltage data in array
+
+
+
+				Vout = (V1 + V2)/3.0;
 //				Vout = 0;
 			}
 			*VDA = round(1000*Vout)/1000.0;
@@ -297,37 +314,45 @@ void *Timer_Irq_Thread(void* resource) {
 //				Vout = 0;
 //			}
 //			VDAprev = Vout;
-			if (Vout > 0) {
-				Vout = Vout + 0.78;
-			} else if (Vout < 0){
-				Vout = Vout - 0.78;
-			}
-
-			if (bpV < bufferV + IMAX) *bpV++ = Vout;	// Store voltage data in array
 
 
-			Vmax = 4;
+//			if (Vout > 0) {
+//				Vout = Vout + 0.78;
+//			} else if (Vout < 0){
+//				Vout = Vout - 0.78;
+//			}
+
+
+			//butterworth
+
+
+			Vmax = 5;
 			if (Vout > Vmax) {						// Set saturation voltages (+10 and -10)
 				Vout = Vmax;
 			} else if (Vout < -Vmax) {
 				Vout = -Vmax;
 			}
 
+
+
+
+
+
 			// if (bpV < bufferV + IMAX) *bpV++ = Vc;	// Store speed data in array
 			if (bpX < bufferX + IMAX) *bpX++ = Xc;	// Store position data in array
 			if (bpT < bufferT + IMAX) *bpT++ = Th;	// Store angle data in array
 
 
-			Vdrop = *bpVDA;
-			*bpVDA = Vout;
-			if (bpVDA < bufferVDA + KMAX - 1) {
-				bpVDA++;
-			} else {
-				bpVDA = bufferVDA;
-			}
-
-			Vavg = (Vavg*KMAX - Vdrop + Vout)/KMAX;		// Average of recently requested voltages
-			if (bpV1 < bufferV1 + IMAX) *bpV1++ = Vavg;	// Store voltage data in array
+//			Vdrop = *bpVDA;
+//			*bpVDA = Vout;
+//			if (bpVDA < bufferVDA + KMAX - 1) {
+//				bpVDA++;
+//			} else {
+//				bpVDA = bufferVDA;
+//			}
+//
+//			Vavg = (Vavg*KMAX - Vdrop + Vout)/KMAX;		// Average of recently requested voltages
+//			if (bpV1 < bufferV1 + IMAX) *bpV1++ = Vavg;	// Store voltage data in array
 
 
 //			if(Xb > -0.015 && Xb < 0.015) {
@@ -352,7 +377,7 @@ void *Timer_Irq_Thread(void* resource) {
 //			}
 
 
-			Aio_Write(&CO0, Vavg);			// Write output voltage to motor
+			Aio_Write(&CO0, Vout);			// Write output voltage to motor
 //		Aio_Write(&CO0, Vconst);			// Write output voltage to motor
 
 			if (mode == 1 && t > 0.5) {
