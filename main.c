@@ -16,6 +16,7 @@
 #include "Encoder.h"
 #include "time.h"
 #include "AIO.h"
+#include "DIO.h"
 #include "matlabfiles.h"
 #include <math.h>
 
@@ -61,6 +62,9 @@ static double *bpT = bufferT;	// speed buffer pointer
 //static double *bpVDA = bufferVDA;	// speed buffer pointer
 static int mode, confirm = 0; // 0 = Regular, 1 = Impulse
 static double angularVelocity;
+static int limitSwitch = 0; // 0 = Regular, 1 = Must turn power off
+MyRio_Dio Ch;
+
 
 // Thread Resource structure for Timer IRQ thread
 typedef struct {
@@ -93,6 +97,10 @@ int main(int argc, char **argv) {
         mode = double_in("\f0 - Regular\n1 - Impulse : \n");
         confirm = double_in("\fare you sure? \nyes - 1, no - 0 : \n");
     }
+
+    // 0. Initializing DIO for limit switch
+     Ch.dir = DIOA_70DIR; Ch.out = DIOA_70OUT; Ch.in = DIOA_70IN; Ch.bit = 0;
+
 //    mode = 1;
     MyRio_IrqTimer irqTimer0;
     ThreadResource irqThread0;
@@ -100,6 +108,9 @@ int main(int argc, char **argv) {
 
     ThreadResource2 updateThread;
     pthread_t thread2;
+
+
+
 
     // 1. Initialize table editor variables
     char *Table_Title = "Payload Stabilizer";
@@ -209,6 +220,8 @@ void *Timer_Irq_Thread(void* resource) {
 	t_inc = (double) timeoutValue;
 	double currentP = 0;
 	static double angP1, angP2;
+
+
 //	static double filteredCartPosition, filteredAngle;
 
 // For system identification
@@ -357,8 +370,14 @@ void *Timer_Irq_Thread(void* resource) {
 //			if(timer > 1000) {
 //				Vconst = 0;
 //			}
+			if (Dio_ReadBit(&Ch) == NiFpga_False) {
+				limitSwitch = 1;
+				printf("lol");
+			} //separate if statement because the only way to turn the switch back on by rebooting the program
 
-
+			if (limitSwitch == 1) {
+				Vout = 0;
+			}
 
 			Aio_Write(&CO0, Vout);			// Write output voltage to motor
 //			Aio_Write(&CO0, Vconst);			// Write output voltage to motor
